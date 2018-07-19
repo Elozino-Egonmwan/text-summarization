@@ -1,12 +1,27 @@
 **New**
-utils.py : To transform 0-1 sequence to sentences.
-extTest_generated.txt
-extTrain_generated.txt
-extVal_generated.txt
+utils.py
+Manual_Extractor/system/extTest_generated_1000.txt
+Manual_Extractor/system/extTrain_generated_1000.txt
+Manual_Extractor/system/extVal_generated_1000.txt
+Manual_Extractor/reference/extTest_reference_1000.txt
+Manual_Extractor/reference/extTrain_reference_1000.txt
+Manual_Extractor/reference/extVal_reference_1000.txt
+Extractor_RNN/system/extTest_generated_clean.txt
+Extractor_RNN/system/extTrain_generated_clean.txt
+Extractor_RNN/system/extVal_generated_clean.txt
+Extractor_RNN/reference/extTest_reference_clean.txt
+Extractor_RNN/reference/extTrain_reference_clean.txt
+Extractor_RNN/reference/extVal_referenc_cleane.txt
+Extractor_RNN/tunedExtTrain_matched.txt
+Extractor_RNN/tunedExtVal_matched.txt
+Extractor_RNN/tunedExtTest_matched.txt
 
 **Updated**
 --New Method--
-
+utils.code_to_sentence_transformer(code_path, document_path, output_path)
+utils.resplit_0_1_sequence_with_doc(code_path, document_path, output_path)
+utils.remove_stopwords(input_file, output_file)
+utils.cutting_first_n_lines(input_file, output_file, n)
 
 
 
