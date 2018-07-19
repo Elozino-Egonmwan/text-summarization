@@ -10,8 +10,8 @@ import tensorflow as tf
 import os
 from tensorflow.contrib import learn
 from tensorflow.contrib.tensorboard.plugins import projector
-from Model._word2vec import isValid
-from Model._data_generator import read_text_file
+from Helper._word2vec import isValid
+from Helper._data_generator import read_text_file
 #from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
 
 

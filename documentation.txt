@@ -1,0 +1,13 @@
+**New**
+utils.py : To transform 0-1 sequence to sentences.
+extTest_generated.txt
+extTrain_generated.txt
+extVal_generated.txt
+
+**Updated**
+--New Method--
+
+
+
+
+--Updated method--

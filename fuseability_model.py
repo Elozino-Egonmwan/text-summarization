@@ -21,13 +21,12 @@ import tensorflow as tf
 import numpy as np
 import random
 import time
-from Model._data_generator import read_text_file
-from Model._word2vec import isValid
+from Helper._data_generator import read_text_file,write_to_file
+from Helper._word2vec import isValid
 from word2vec import avg_Length, create_dict, load_processed_embeddings
-from Model._data_generator import write_to_file
 from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
 #from logistic_classifier2 import Logistic_Classifier
-from DNN_classifier import dnn_classifier
+from logistic_classifier import _classifier
 
 #about 42,000 positive pairs
 SOURCE_SENTS1 = "A_Training/Fusion_Corpus/Positives/Twos/first.txt"
@@ -72,7 +71,7 @@ def main():
     log_time(start)          
     features = np.asarray(get_logistic_features('LOG_DIR_300/RBM_model/Dim_Red/model.ckpt'))    
     print(features.shape)
-    dnn_classifier("Training",features,labels)    
+    _classifier("Training",features,labels)    
     
     tf.reset_default_graph()
     
@@ -641,6 +640,15 @@ def get_sents_embeddings(sents,word_embeddings,vocab,sess,dest_dir,sub_set = Non
     saver = tf.train.Saver()  
     saver.save(sess, dest_dir+'temp.ckpt')   
 
+def get_sent_embeddings(sents,word_embeddings,vocab,sess,dest_dir,caller=None):       
+    sents = preprocess(sents)    
+    if caller is None:
+        avg_length = NUM_OF_VISIBLE_UNITS #set it to the num of visible units hard coded for maintenace        
+    vocab_dict = create_dict(vocab,avg_length)      
+    ids = np.array(list(vocab_dict.transform(sents))) - 1  #transform inputs     
+    embed = tf.nn.embedding_lookup(word_embeddings,ids) 
+    return sess.run(embed)
+    
 #shuffles sents1 and 2 while keeping relationship within the pairs
 def shuffle_data(data1, data2, limit=None):    
     data_tuple =[]

@@ -17,15 +17,15 @@
 import tensorflow as tf
 import numpy as np
 import random
-import nltk
-from nltk.translate.bleu_score import SmoothingFunction
-from Model._data_generator import read_text_file
+from metrics import bleuPerSent
+from Helper._data_generator import read_text_file
 from fuseability_checker import get_conc_hidden_states
 from fuseability_model import preprocess
 from word2vec import load_processed_embeddings,create_dict
 from tensorflow.contrib import seq2seq,rnn,layers
 from tensorflow.python.layers import core as layers_core
-import logging
+from itertools import groupby
+#import logging
 
 #train set
 TRAIN_SOURCE_SENTS1 = "A_Training/Fusion_Corpus/Positives/Twos/first.txt"
@@ -42,7 +42,7 @@ TEST_SOURCE_SENTS1 = "C_Testing/Fusion_Corpus/Positives/Twos/first.txt"
 TEST_SOURCE_SENTS2 =  "C_Testing/Fusion_Corpus/Positives/Twos/second.txt"
 TEST_FUSED_SOURCE =  "C_Testing/Fusion_Corpus/Positives/Twos/fused.txt"
 
-MODEL_DIR = "LOG_DIR_300/Fusion/Model/Plain/"
+MODEL_DIR = "LOG_DIR_300/Fusion/Model/v3/"
 TRAIN_REF = "LOG_DIR_300/Fusion/reference/fusionTrain_reference.txt"
 TRAIN_SYS = "LOG_DIR_300/Fusion/system/fusionTrain_system.txt"
 
@@ -60,7 +60,7 @@ MODEL_PATH1 = 'LOG_DIR_300/RBM_model/Sent1/'
 #MODEL_PATH2 = 'LOG_DIR_300/RBM_model/Sent2/'
 MODEL = 'LOG_DIR_300/RBM_model/Evaluating/'
 
-BATCH_SIZE = 20 #20
+BATCH_SIZE = 50 #50
 DECODER = "LOG_DIR_300/Fusion/Ground_truth/"
 NUM_UNITS = 200  #200
 
@@ -71,6 +71,7 @@ STOP= " stte"   #" </s>"
 END = 1
 vocab = read_text_file('LOG_DIR_300/embeddings/metadata.tsv')        
 vocab_size = len(vocab)
+UNK = -1 
 embd_dim = 300
 seq_len = 10
 num_examples =100
@@ -101,21 +102,22 @@ def model_wrapper(n_examples,mood,source1,source2,sourceFused,sys,ref):
     
     if state=="Training":
         num_batches = int(num_examples/BATCH_SIZE)
-        epochs = 1000  #100
+        epochs = 1200  #1000
         steps = num_batches * epochs
         num_epochs = None        
         inc_prob = 1.0/steps        
     else:
-        num_epochs = 1
+        num_epochs = 1        
     
     sess = tf.InteractiveSession()
     
     #initialize estimator
-    #run_config = tf.estimator.RunConfig(save_summary_steps=num_batches,save_checkpoints_steps=num_batches)
+    #run_config = tf.estimator.RunConfig(save_summary_steps=num_batches)
+    run_config = tf.estimator.RunConfig(save_summary_steps=num_batches,save_checkpoints_steps=num_batches*3)
     estimator = tf.estimator.Estimator(
         model_fn=rbmE_gruD,
         model_dir=MODEL_DIR,
-        #config = run_config,
+        config = run_config,
         params = params)       
     
     #get data
@@ -146,7 +148,7 @@ def model_wrapper(n_examples,mood,source1,source2,sourceFused,sys,ref):
         
         #mask padded or unk words
         weights = sess.run(tf.to_float(tf.not_equal(ids, -1)))         
-        ids[ids==-1] = vocab_size-1                 
+        ids[ids==-1] = vocab_size-1                
     
     if state=="Infering":        
         seq_len=15
@@ -170,11 +172,12 @@ def model_wrapper(n_examples,mood,source1,source2,sourceFused,sys,ref):
     print_predictions = tf.train.LoggingTensorHook(
             tensors_to_log,every_n_iter=1,
             formatter = id2words)
-    print_lr = tf.train.LoggingTensorHook(lr,every_n_iter=100)
+    print_lr = tf.train.LoggingTensorHook(lr,every_n_iter=1000)
     
     '''run model'''
     coord = tf.train.Coordinator()
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)    
+    tf.reset_default_graph()    #reset graph before importing saved checkpoints
     
     if state=="Training":    
         estimator.train(input_fn=inp_fn,hooks=[print_predictions,print_lr],steps=steps)        
@@ -202,7 +205,7 @@ def model_wrapper(n_examples,mood,source1,source2,sourceFused,sys,ref):
     
     #BLEU evaluation    
     hyp = read_text_file(sys)
-    bleu = calcBleu(fused,hyp)
+    bleu = bleuPerSent(fused,hyp)
     print("Bleu score: ", bleu)
 
 #model1 - rbm encoder & gru decoder
@@ -216,11 +219,11 @@ def rbmE_gruD(mode,features,labels,params):
     batch_size = params["batch_size"]
     
     #Encoder
-    enc_cell = rnn.GRUCell(num_units=NUM_UNITS)
+    enc_cell = rnn.NASCell(num_units=NUM_UNITS)
     enc_out, enc_state = tf.nn.dynamic_rnn(enc_cell,inp,time_major=False,dtype=tf.float32)      
     
     #Decoder    
-    cell = rnn.GRUCell(num_units=NUM_UNITS)    
+    cell = rnn.NASCell(num_units=NUM_UNITS)    
     
     _, embeddings = load_processed_embeddings(sess=tf.InteractiveSession())             
     out_lengths = tf.constant(seq_len,shape=[batch_size])                
@@ -244,37 +247,32 @@ def rbmE_gruD(mode,features,labels,params):
         decoder = seq2seq.BasicDecoder(                
                 cell=cell,helper=helper,initial_state=enc_state,
                 output_layer=projection_layer) 
-        decoder.tracks_own_finished=True
-        (dec_outputs,_,_) = seq2seq.dynamic_decode(decoder)
+        #decoder.tracks_own_finished=True
+        (dec_outputs,_,_) = seq2seq.dynamic_decode(decoder,maximum_iterations=seq_len)
+        #(dec_outputs,_,_) = seq2seq.dynamic_decode(decoder)
         dec_ids = dec_outputs.sample_id          
         logits = dec_outputs.rnn_output                   
         return dec_ids,logits        
+    
+    #equalize logits, labels and weight lengths incase of early finish in decoder
+    def norm_logits_loss(logts,ids,weights):        
+        current_ts = tf.to_int32(tf.minimum(tf.shape(ids)[1], tf.shape(logts)[1]))
+        logts = tf.slice(logts, begin=[0,0,0], size=[-1, current_ts, -1])       
+        ids = tf.slice(ids, begin=[0, 0], size=[-1, current_ts])
+        weights = tf.slice(weights, begin=[0, 0], size=[-1, current_ts])
+        return logts,ids,weights
     
     #training mode
     if state == "Training":
         dec_ids,logits = decode(train_helper)                
         # some sample_id are overwritten with '-1's
         #dec_ids = tf.argmax(logits, axis=2)
-        tf.identity(dec_ids, name="predictions")          
+        tf.identity(dec_ids, name="predictions")   
+        logits,ids,weights = norm_logits_loss(logits,ids,weights)
         loss = tf.contrib.seq2seq.sequence_loss(logits,ids,weights=weights)
-        #learning_rate=0.01) #0.0001           
-                  
-        learning_rate = tf.train.exponential_decay(learning_rate=0.01,  #0.01
-                                                   global_step=tf.train.get_global_step(),
-                                                   decay_steps=num_batches*50,
-                                                   decay_rate=0.5)                                                   
-        '''
-        piece_1 = num_batches*8
-        piece_2 = piece_1 + (num_batches*12)
-        piece_3 = piece_2 + (num_batches*10)
-        piece_4 = piece_3 + (num_batches*70)
-        
-        learning_rate = tf.train.piecewise_constant(x= tf.train.get_global_step(),
-                                                    boundaries=[piece_1,piece_2,piece_3,piece_4],
-                                                    values=[0.01,0.005,0.003,0.001,0.0001])
-        '''
-        tf.identity(learning_rate, name="learning_rate")    
-        
+        learning_rate=0.001 #0.0001         
+
+        tf.identity(learning_rate, name="learning_rate")       
     
     #evaluation mode    
     if state == "Evaluating" or state == "Testing":               
@@ -283,19 +281,22 @@ def rbmE_gruD(mode,features,labels,params):
         tf.identity(eval_dec_ids, name="predictions")                  
         
         #equalize logits, labels and weight lengths incase of early finish in decoder
+        eval_logits,ids,weights = norm_logits_loss(eval_logits,ids,weights)
+        '''
         current_ts = tf.to_int32(tf.minimum(tf.shape(ids)[1], tf.shape(eval_logits)[1]))
         ids = tf.slice(ids, begin=[0, 0], size=[-1, current_ts])
         weights = tf.slice(weights, begin=[0, 0], size=[-1, current_ts])
         #mask_ = tf.sequence_mask(lengths=target_sequence_length, maxlen=current_ts, dtype=eval_logits.dtype)
         eval_logits = tf.slice(eval_logits, begin=[0,0,0], size=[-1, current_ts, -1])       
+        '''
         eval_loss = tf.contrib.seq2seq.sequence_loss(eval_logits,ids,weights=weights)       
     
     #beamSearch decoder    
-    init_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=10)            
+    init_state = tf.contrib.seq2seq.tile_batch(enc_state, multiplier=5)            
     beamSearch_decoder = seq2seq.BeamSearchDecoder(cell,embeddings,start_tokens,end_token=END,
-                                                   initial_state=init_state,beam_width=10,
+                                                   initial_state=init_state,beam_width=5,
                                                    output_layer=projection_layer)
-    (infer_outputs,_,_)= seq2seq.dynamic_decode(beamSearch_decoder,maximum_iterations=seq_len*10)
+    (infer_outputs,_,_)= seq2seq.dynamic_decode(beamSearch_decoder,maximum_iterations=seq_len)
     infer_ids =infer_outputs.predicted_ids
     infer_probs=infer_outputs.beam_search_decoder_output.scores
     infer_probs = tf.reduce_prod(infer_probs,axis=1)    
@@ -319,13 +320,6 @@ def rbmE_gruD(mode,features,labels,params):
     else:
         spec = tf.estimator.EstimatorSpec(mode=mode,predictions=infers)
     return spec
-    
-    
-#evaluate BLEU metric    
-def calcBleu(ref,hyp):
-    smoothing = SmoothingFunction()
-    bleuScore = nltk.translate.bleu_score.corpus_bleu(ref,hyp,smoothing_function=smoothing.method5)
-    return bleuScore 
 
 #coverts list of ids to words
 def id2words(ids):     
@@ -344,7 +338,9 @@ def id2words(ids):
     for sents in ids:
         sent = ""        
         for word_ids in sents:
-            sent += vocab[word_ids]+" "            
+            if word_ids != END and word_ids != UNK:
+                sent += vocab[word_ids]+" "    
+        sent = rmvDups(sent)        
         decoded.append(sent)
         
     if state=="Training":
@@ -360,13 +356,18 @@ def id2words(ids):
     write_to_file(file,decoded,mode)    
     return "Step "+str(count)    
 
+def rmvDups(inp):
+    inp = [word[0] for word in groupby(inp.split())]
+    return ' '.join(inp)
+
 def ids2words(ids):
-    decoded=[]
+    decoded=[]    
     for sents in ids:
         sent = ""
         #sent = []
         for word_ids in sents:
-            sent += vocab[word_ids]+" "
+            if word_ids != UNK:
+                sent += vocab[word_ids]+" "
             #sent.append(vocab[word_ids])
         decoded.append(sent)
     return decoded
@@ -390,23 +391,19 @@ def lookUp_batch_embeddings(dest_dir,sents,extra_pad=False):
 #read sent1,sent2 and its fused sent from file
 def get_data(source1,source2,src_fused):
     #shuffle the positive pairs
-    sents1 = read_text_file(source1)
-    sents2 = read_text_file(source2) 
-    fused = read_text_file(src_fused)   
-    sents1,sents2,fused = shuffle_data(sents1,sents2,fused,num_examples)  
+    sents1 = read_text_file(source1,num_examples)
+    sents2 = read_text_file(source2,num_examples) 
+    fused = read_text_file(src_fused,num_examples)   
+    #sents1,sents2,fused = shuffle_data(sents1,sents2,fused,num_examples)  
       
     return sents1,sents2,fused
 
-def get_sents_embedding(sents,word_embeddings,vocab,sess,dest_dir,extra_pad,sub_set = None):       
-    if not sub_set is None:        
-        sents = preprocess(sents[:sub_set])    #temporarily work with the first 1500 sents    
-    else:
-        sents = preprocess(sents)
-    #sents = preprocess(sents)    #temporarily work with the first 1500 sents    
+def get_sents_embedding(sents,word_embeddings,vocab,sess,dest_dir,extra_pad,sub_set = None):           
+    sents = preprocess(sents)    #temporarily work with the first 1500 sents    
     avg_length = avg_Length(sents,sess) #returns the AVERAGE of all the sentence lenghts 
     
     if extra_pad:    
-        avg_length = avg_length+3    
+        avg_length = avg_length+2    
     vocab_dict = create_dict(vocab,avg_length)      
     ids = np.array(list(vocab_dict.transform(sents))) - 1 #transform inputs     
     embed = tf.nn.embedding_lookup(word_embeddings,ids)  
@@ -463,7 +460,7 @@ def reset_file(file):
         pass
 
 def train_model():    
-    n_examples = 41400 #41400
+    n_examples = 20000 #40000
     mood= "Training"
     source1 = TRAIN_SOURCE_SENTS1
     source2 = TRAIN_SOURCE_SENTS2
@@ -474,7 +471,7 @@ def train_model():
     model_wrapper(n_examples,mood,source1,source2,sourceFused,sys,ref)
     
 def eval_model():    
-    n_examples = 2500
+    n_examples = 2400
     mood= "Evaluating"
     source1 = SOURCE_SENTS1
     source2 = SOURCE_SENTS2
@@ -496,7 +493,7 @@ def test_model():
     model_wrapper(n_examples,mood,source1,source2,sourceFused,sys,ref)
 
 def infer_model():    
-    n_examples = 100
+    n_examples = 2000
     mood= "Infering"
     source1 = TEST_SOURCE_SENTS1
     source2 = TEST_SOURCE_SENTS2

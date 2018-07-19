@@ -3,12 +3,12 @@ import tensorflow as tf
 import numpy as np
 import time
 from word2vec import load_processed_embeddings
-from Model._data_generator import read_text_file,write_to_file
+from Helper._data_generator import read_text_file,write_to_file
 from fuseability_model import shuffle_data,form_triples,extract_labels_data,get_sents_embeddings,batching,\
 forward_prop,back_prop,positive, negative, contrastive_divergence,error,format_file,log_time,convert_to_categorical
 from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
 #from logistic_classifier2 import Logistic_Classifier
-from DNN_classifier import dnn_classifier
+from logistic_classifier import _classifier
 
 #validation set
 SOURCE_SENTS1 = "B_Validating/Fusion_Corpus/Positives/Twos/first.txt"
@@ -34,7 +34,7 @@ MODEL_PATH2 = 'LOG_DIR_300/RBM_model/Sent2/'
 MODEL = 'LOG_DIR_300/RBM_model/Evaluating/'
 CONCAT = 'LOG_DIR_300/RBM_model/Concantenated/'
 DIM_RED = 'LOG_DIR_300/RBM_model/Dim_Red/'
-CLASSIFIER = 'LOG_DIR_300/RBM_model/Logistic_Classifier/'
+CLASSIFIER = 'LOG_DIR_300/Fus_Checker/'
 STATUS_LOG = 'LOG_DIR_300/RBM_model/log.txt'
 
 #NUM_EXAMPLES = 2000 #temporarily working with 1500 examples
@@ -44,25 +44,24 @@ isConcat = False
 
 def main(): 
     start = time.time()
+    
+    #train set    
+    with tf.Session(graph = tf.Graph()) as sess: 
+        train_data = prepare_data(TRAIN_SOURCE_SENTS1,TRAIN_SOURCE_SENTS2,_TRAIN_SOURCE_SENTS1,_TRAIN_SOURCE_SENTS1)        
+        run_experiment("Train",train_data,start)
+    
     '''        
     #validation set    
     with tf.Session(graph = tf.Graph()) as sess: 
         validate_data = prepare_data(SOURCE_SENTS1,SOURCE_SENTS2,_SOURCE_SENTS1,_SOURCE_SENTS1)        
         run_experiment("Validation",validate_data,start)
-    '''   
+      
     
     #test set    
     with tf.Session(graph = tf.Graph()) as sess: 
         test_data = prepare_data(TEST_SOURCE_SENTS1,TEST_SOURCE_SENTS2,_TEST_SOURCE_SENTS1,_TEST_SOURCE_SENTS1)        
-        run_experiment("Test",test_data,start)
-    
+        run_experiment("Test",test_data,start)   
     '''
-    #train set    
-    with tf.Session(graph = tf.Graph()) as sess: 
-        train_data = prepare_data(TRAIN_SOURCE_SENTS1,TRAIN_SOURCE_SENTS2,_TRAIN_SOURCE_SENTS1,_TRAIN_SOURCE_SENTS1)        
-        run_experiment("Train",train_data,start)
-    '''
-    
  
 def run_experiment(desc,data,start):
     
@@ -98,7 +97,7 @@ def run_experiment(desc,data,start):
     classifier = Logistic_Classifier(nData,dim,cat_lab,labels,n,CLASSIFIER)
     classifier.test_classifier(desc,weights,biases)
     '''
-    dnn_classifier(desc,dim,labels)
+    _classifier(desc,dim,labels,"Pred",model_dir=CLASSIFIER)
     
     #NUM_OF_HIDDEN_UNITS = 1
     #dest_file = wrapper_rbm("Dim Reduction",DIM_RED,NUM_EPOCHS)
@@ -222,13 +221,13 @@ def prepare_data(source1,source2,_source1,_source2):
     #shuffle the ~2500 positive pairs and form triples with the label
     sents1 = read_text_file(source1)
     sents2 = read_text_file(source2)     
-    sents1,sents2 = shuffle_data(sents1,sents2,2000) #2000p,3400n test
+    sents1,sents2 = shuffle_data(sents1,sents2,25000) #2000p,3400n test
     data = form_triples(1,sents1,sents2)    
         
     #mix with the 4300 negative pairs
     _sents1 = read_text_file(_source1)
     _sents2 = read_text_file(_source2)     
-    _sents1,_sents2 = shuffle_data(_sents1,_sents2,3400)    
+    _sents1,_sents2 = shuffle_data(_sents1,_sents2,25000)    
     neg = form_triples(0,_sents1,_sents2)    
     
     data.extend(neg)   #combine positive and negative examples    
@@ -263,7 +262,6 @@ def transposer(source):
     #save_m(data,MODEL)
     return data
 
-
 def save_m(model,dest_dir):
     sess = tf.Session()
     batches = tf.Variable(model,name='batches')
@@ -281,6 +279,13 @@ def get_conc_hidden_states(sent1,sent2):
     num_batches,batchSize,features,dimension = conc.shape
     unstacked_conc_h= tf.reshape(conc,[num_batches*batchSize,features,dimension])
     return unstacked_conc_h,conc
+
+def get_sent_states(sent,model_path):       
+    sent_ = wrapper_model("Sent",model_path,MODEL,sent)        
+    num_batches,batchSize,features,dimension = sent_.shape
+    unstacked= tf.reshape(sent_,[num_batches*batchSize,features,dimension])
+    return unstacked
+
 
 if __name__ == "__main__":
     main()

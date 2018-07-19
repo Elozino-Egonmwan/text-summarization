@@ -25,7 +25,7 @@
 
 import nltk
 import time
-from Model._data_generator import preprocess,read_text_file,get_abs_art,write_to_file,reset_file,get_files_path
+from Helper._data_generator import preprocess,read_text_file,get_abs_art,write_to_file,reset_file,get_files_path
 from nltk.stem.porter import PorterStemmer
 
 START = time.time()
